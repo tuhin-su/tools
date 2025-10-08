@@ -1,0 +1,46 @@
+#!/bin/bash
+# Simple Samba Docker launcher
+
+# Usage info
+if [ -z "$1" ]; then
+    echo "Usage: dsmb <path/to/share> [password]"
+    exit 1
+fi
+
+# Config
+SHARE_PATH=$(realpath "$1")
+SHARE_NAME=$(basename "$SHARE_PATH")
+USERNAME=$(whoami)
+PASSWORD="${2:-1234}"        # If no password is passed, default = 1234
+CONTAINER_NAME="dsmb_${SHARE_NAME}"
+
+# Stop old container if exists
+if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+    echo "[+] Removing existing container..."
+    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1
+fi
+
+# Run Samba container
+echo "[+] Starting Samba server for folder: $SHARE_PATH"
+docker run -d \
+  --name "$CONTAINER_NAME" \
+  -p 139:139 -p 445:445 \
+  -v "$SHARE_PATH":/mount \
+  -e USERID=$(id -u) \
+  -e GROUPID=$(id -g) \
+  -e USERNAME="$USERNAME" \
+  -e PASSWORD="$PASSWORD" \
+  dperson/samba \
+  -u "$USERNAME;$PASSWORD" \
+  -s "$SHARE_NAME;/mount;yes;yes"
+
+# Output info
+IP=$(hostname -I | awk '{print $1}')
+echo ""
+echo "[✓] Samba share is ready!"
+echo "📁 Folder: $SHARE_PATH"
+echo "📦 Container: $CONTAINER_NAME"
+echo "👤 User: $USERNAME"
+echo "🔑 Password: $PASSWORD"
+echo "💻 Access from Windows: \\\\$IP\\$SHARE_NAME"
+echo "💻 Access from Linux: smbclient //$IP/$SHARE_NAME -U $USERNAME"
