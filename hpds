@@ -1,0 +1,39 @@
+#!/bin/env bash
+# === Enable Internet Sharing (Dynamic) ===
+
+# Ask user or read from argument
+INTERNET_IF="${5:-}"
+if [[ -z "$INTERNET_IF" ]]; then
+  echo
+  echo "Available network interfaces:"
+  ip -o link show | awk -F': ' '{print "  - " $2}' | grep -v "lo"
+  read -rp "Enter your Internet interface (the one with internet, e.g. eth0 or wlan1): " INTERNET_IF
+fi
+
+AP_IF="$IFACE"
+AP_SUBNET=$(echo "$AP_IP" | cut -d'/' -f1 | awk -F'.' '{print $1"."$2"."$3".0/24"}')
+
+echo
+echo "[INFO] Sharing Internet from '$INTERNET_IF' to '$AP_IF' ($AP_SUBNET)"
+
+# Make IP forwarding permanent (if not already)
+if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf && \
+   ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.d/99-sotingos.conf 2>/dev/null; then
+  echo "[INFO] Enabling IP forwarding permanently..."
+  echo "net.ipv4.ip_forward=1" | sudo tee /etc/sysctl.d/99-sotingos.conf >/dev/null
+  sudo sysctl --system >/dev/null
+else
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null
+fi
+
+# Setup NAT (Masquerade)
+iptables -t nat -C POSTROUTING -o "$INTERNET_IF" -s "$AP_SUBNET" -j MASQUERADE 2>/dev/null || \
+iptables -t nat -A POSTROUTING -o "$INTERNET_IF" -s "$AP_SUBNET" -j MASQUERADE
+
+iptables -C FORWARD -i "$INTERNET_IF" -o "$AP_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+iptables -A FORWARD -i "$INTERNET_IF" -o "$AP_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT
+
+iptables -C FORWARD -i "$AP_IF" -o "$INTERNET_IF" -j ACCEPT 2>/dev/null || \
+iptables -A FORWARD -i "$AP_IF" -o "$INTERNET_IF" -j ACCEPT
+
+echo "[OK] NAT and forwarding configured successfully."
