@@ -1,0 +1,8 @@
+#!/bin/bash
+IFACE="$1"
+ACTION="$2"
+
+if [ "$ACTION" == "down" ]; then
+  echo "[DHCP] Clearing leases for $IFACE"
+  rm -f /var/lib/NetworkManager/*lease*
+fi
