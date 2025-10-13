@@ -7,13 +7,18 @@
 # -d <dnsfile>  : hosts file (lines: "ap.test 192.168.50.1" OR "192.168.50.1 ap.test")
 # -u <upstreams>: comma-separated upstream DNS servers (e.g. 8.8.8.8,1.1.1.1)
 # If -u omitted, dnsmasq will use system DNS (/etc/resolv.conf).
-
+#
+# NEW behavior for -p:
+#   - omit -p entirely -> open network (no WPA)
+#   - -p any           -> open network but script will "show" the password string "any" (not enforced)
+#   - -p <password>    -> WPA2 network using that password (must be >= 8 chars)
+#
 set -euo pipefail
 
 # Defaults
 IFACE=""
 SSID="SotingOS_AP"
-PASSPHRASE="StrongPass123"
+PASSPHRASE=""                  # default empty -> open network unless -p provided
 AP_IP="192.168.50.1"           # gateway address (AP)
 DHCP_RANGE_START="192.168.50.10"
 DHCP_RANGE_END="192.168.50.200"
@@ -34,7 +39,9 @@ Required:
 
 Options:
   -s <ssid>               AP SSID (default: $SSID)
-  -p <passphrase>         WPA2 passphrase (default: $PASSPHRASE)
+  -p <passphrase>         WPA2 passphrase (default: none => open network)
+                          Special:
+                            -p any   -> open network but script will display "any" as password (not enforced)
   -g <ap_ip>              AP IP / gateway (default: $AP_IP)
   -r <start,end>          DHCP range (default: $DHCP_RANGE_START,$DHCP_RANGE_END)
   -d <dnsfile>            path to DNS/hosts file (lines: "ap.test 192.168.50.1" or "192.168.50.1 ap.test")
@@ -87,8 +94,31 @@ done
 mkdir -p "$TMPDIR"
 chmod 700 "$TMPDIR"
 
-# hostapd config
-cat > "$HOSTAPD_CONF" <<EOF
+# Determine AP security mode and validation
+AP_MODE="open"   # "open" or "wpa2"
+DISPLAY_PASSWORD=""  # if non-empty, show this to user (even if network is open)
+if [[ -z "$PASSPHRASE" ]]; then
+  AP_MODE="open"
+  DISPLAY_PASSWORD=""
+  echo "[*] No -p provided -> creating OPEN network (no password)."
+elif [[ "$PASSPHRASE" == "any" ]]; then
+  AP_MODE="open"
+  DISPLAY_PASSWORD="any"
+  echo "[*] -p any provided -> creating OPEN network and displaying 'any' as password (not enforced)."
+else
+  # user provided an actual passphrase; validate length
+  if [[ ${#PASSPHRASE} -lt 8 ]]; then
+    echo "Error: WPA2 passphrase must be at least 8 characters. Use -p any to bypass enforcement (open network)."
+    exit 4
+  fi
+  AP_MODE="wpa2"
+  DISPLAY_PASSWORD="$PASSPHRASE"
+  echo "[*] WPA2 passphrase provided -> creating WPA2 network (password will be used and shown below)."
+fi
+
+# hostapd config: conditional on AP_MODE
+if [[ "$AP_MODE" == "wpa2" ]]; then
+  cat > "$HOSTAPD_CONF" <<EOF
 interface=$IFACE
 driver=nl80211
 ssid=$SSID
@@ -108,6 +138,26 @@ country_code=US
 logger_syslog=-1
 logger_stdout=1
 EOF
+else
+  # open network (no WPA lines)
+  cat > "$HOSTAPD_CONF" <<EOF
+interface=$IFACE
+driver=nl80211
+ssid=$SSID
+hw_mode=g
+channel=6
+ieee80211n=1
+wmm_enabled=1
+
+# Open network (no WPA/WPA2)
+auth_algs=1
+# wpa=0  # implicitly open
+
+country_code=US
+logger_syslog=-1
+logger_stdout=1
+EOF
+fi
 
 # Prepare hosts addn file for dnsmasq.
 if [[ -n "$DNS_FILE" && -f "$DNS_FILE" ]]; then
@@ -214,6 +264,16 @@ fi
 echo
 echo "PIDs: hostapd=$HOSTAPD_PID dnsmasq=$DNSMASQ_PID tcpdump=$TCPDUMP_PID"
 echo "AP iface: $IFACE  AP IP: $AP_IP  DHCP range: $DHCP_RANGE_START - $DHCP_RANGE_END"
+
+# Print password/display info (if any)
+if [[ -n "$DISPLAY_PASSWORD" ]]; then
+  echo
+  echo "[!] Password/display: $DISPLAY_PASSWORD"
+  if [[ "$AP_MODE" == "open" ]]; then
+    echo "[!] NOTE: Network is OPEN (no WPA). The above string is shown only for convenience and is NOT enforced."
+  fi
+fi
+
 echo
 
 # cleanup on Ctrl-C
