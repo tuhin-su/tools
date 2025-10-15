@@ -1,0 +1,16 @@
+#!/bin/bash
+# vm-down.sh
+# Stops VMware services and brings down VMware network interface
+
+# Bring down VMware network interfaces
+echo "Bringing down VMware network interfaces..."
+sudo ip link set vmnet1 down
+sudo ip link set vmnet8 down
+
+# Stop VMware services
+echo "Stopping VMware services..."
+sudo systemctl stop vmware-usbarbitrator
+sudo systemctl stop vmware-networks
+sudo systemctl stop vmware
+
+echo "VMware services stopped and network interfaces removed."
