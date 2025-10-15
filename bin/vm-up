@@ -1,0 +1,17 @@
+#!/bin/bash
+# vm-up.sh
+# Starts VMware services and brings up VMware network interface
+
+# Start VMware services
+echo "Starting VMware services..."
+sudo systemctl start vmware
+sudo systemctl start vmware-networks
+sudo systemctl start vmware-usbarbitrator
+
+# Bring up VMware network interfaces
+echo "Bringing up VMware network interfaces..."
+# Replace vmnet1 and vmnet8 with your actual VMware interface names if different
+sudo ip link set vmnet1 up
+sudo ip link set vmnet8 up
+
+echo "VMware services started and network interfaces are up."
