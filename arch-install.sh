@@ -1,157 +1,125 @@
+ogin desktop
+
+💾 Encrypted data only
+
+
+Just tell me.
 #!/bin/bash
 set -e
 
-### ================= CONFIG =================
-DISK="/dev/nvme0n1"      # CHANGE IF NEEDED
-HOSTNAME="arch"
-USERNAME="tuhin"
-USERPASS="1234"
-EFI_SIZE="2G"
-SYS_SIZE="200G"
-TIMEZONE="Asia/Kolkata"
-LOCALE="en_US.UTF-8"
+DISK=/dev/nvme0n1
+HOST=arch
+USER=tuhin
+PASS=1234
 
-### ================= PREP =================
-timedatectl set-ntp true
-pacman -Sy --noconfirm archlinux-keyring
+echo "==> Wiping disk"
+sgdisk --zap-all $DISK
+wipefs -a $DISK
 
-### ================= WIPE DISK =================
-wipefs -af $DISK
-sgdisk -Z $DISK
+echo "==> Creating partitions"
+sgdisk -n1:0:+2G -t1:ef00 $DISK
+sgdisk -n2:0:+200G -t2:8300 $DISK
+sgdisk -n3:0:0 -t3:8300 $DISK
 
-### ================= PARTITION =================
-sgdisk -n 1:0:+$EFI_SIZE -t 1:ef00 $DISK
-sgdisk -n 2:0:+$SYS_SIZE -t 2:8300 $DISK
-sgdisk -n 3:0:0         -t 3:8300 $DISK
+mkfs.fat -F32 ${DISK}p1
+mkfs.btrfs -f ${DISK}p2
+mkfs.btrfs -f ${DISK}p3
 
-EFI="${DISK}p1"
-SYS="${DISK}p2"
-DATA="${DISK}p3"
-
-### ================= FILESYSTEM =================
-mkfs.fat -F32 $EFI
-mkfs.btrfs -f $SYS
-mkfs.btrfs -f $DATA
-
-mount $SYS /mnt
-btrfs sub create /mnt/@root
-btrfs sub create /mnt/@pkg
-btrfs sub create /mnt/@snapshots
+mount ${DISK}p2 /mnt
+btrfs subvolume create /mnt/@
+btrfs subvolume create /mnt/@snapshots
 umount /mnt
 
-mount -o subvol=@root,noatime,compress=zstd $SYS /mnt
-mkdir -p /mnt/{boot,home,var/cache/pacman/pkg,.snapshots}
+mount -o noatime,compress=zstd,subvol=@ ${DISK}p2 /mnt
+mkdir -p /mnt/{boot,data,.snapshots}
+mount ${DISK}p1 /mnt/boot
+mount -o noatime,compress=zstd ${DISK}p3 /mnt/data
 
-mount -o subvol=@pkg,noatime,compress=zstd $SYS /mnt/var/cache/pacman/pkg
-mount -o subvol=@snapshots,noatime,compress=zstd $SYS /mnt/.snapshots
-mount $DATA /mnt/home
-mount $EFI /mnt/boot
-
-### ================= BASE INSTALL =================
-pacstrap /mnt base linux linux-firmware btrfs-progs \
-  sudo networkmanager snapper plymouth \
-  iproute2 bridge-utils openvswitch tcpdump
+echo "==> Installing base system"
+pacstrap /mnt base linux linux-firmware \
+  networkmanager sudo btrfs-progs snapper \
+  iproute2 iptables tcpdump git vim
 
 genfstab -U /mnt >> /mnt/etc/fstab
 
-### ================= CHROOT =================
-arch-chroot /mnt /bin/bash <<EOF
+arch-chroot /mnt <<EOF
+set -e
 
-### TIME & LOCALE
-ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+ln -sf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime
 hwclock --systohc
-sed -i "s/#$LOCALE/$LOCALE/" /etc/locale.gen
+
+echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
 locale-gen
-echo "LANG=$LOCALE" > /etc/locale.conf
-echo "$HOSTNAME" > /etc/hostname
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
-### USER (ROOT LOCKED)
-passwd -l root
-useradd -m -G wheel $USERNAME
-echo "$USERNAME:$USERPASS" | chpasswd
-echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/$USERNAME
+echo $HOST > /etc/hostname
 
-### BOOTLOADER (APPLE-STYLE SILENT)
+echo "root:$PASS" | chpasswd
+useradd -m -G wheel $USER
+echo "$USER:$PASS" | chpasswd
+echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
+
+systemctl enable NetworkManager
+
+echo "==> systemd-boot setup"
 bootctl install
-ROOT_UUID=\$(blkid -s UUID -o value $SYS)
 
-cat > /boot/loader/loader.conf <<BOOT
+cat > /boot/loader/loader.conf <<LOADER
 default arch
 timeout 0
 editor no
-console-mode keep
-BOOT
+console-mode max
+LOADER
 
-cat > /boot/loader/entries/arch.conf <<BOOT
+cat > /boot/loader/entries/arch.conf <<ENTRY
 title Arch Linux
 linux /vmlinuz-linux
 initrd /initramfs-linux.img
-options root=UUID=\$ROOT_UUID rw quiet loglevel=0 rd.systemd.show_status=false rd.udev.log_level=0 systemd.log_target=null vt.global_cursor_default=0 splash
-BOOT
+options root=UUID=$(blkid -s UUID -o value ${DISK}p2) \
+rootflags=subvol=@ rw quiet loglevel=0 rd.systemd.show_status=0 \
+vt.global_cursor_default=0 systemd.log_level=emergency \
+systemd.log_target=null
+ENTRY
 
-### INITRAMFS (NO OUTPUT)
-sed -i 's/^HOOKS=.*/HOOKS=(base systemd plymouth autodetect modconf block filesystems keyboard fsck)/' /etc/mkinitcpio.conf
-plymouth-set-default-theme -R text
-
-### SNAPSHOT + AUTO RECOVERY
+echo "==> Snapper config"
 snapper -c root create-config /
-systemctl enable snapper-timeline.timer
+rm -rf /.snapshots
+mkdir /.snapshots
+mount -a
 
-cat > /usr/local/bin/boot-fail-rollback.sh <<'ROLL'
-#!/bin/bash
-[ -f /run/boot-success ] && exit 0
-snapper rollback && reboot -f
-ROLL
-chmod +x /usr/local/bin/boot-fail-rollback.sh
+snapper -c root set-config \
+  TIMELINE_CREATE=yes \
+  TIMELINE_CLEANUP=yes \
+  NUMBER_LIMIT=5 \
+  TIMELINE_LIMIT_HOURLY=2 \
+  TIMELINE_LIMIT_DAILY=2 \
+  TIMELINE_LIMIT_WEEKLY=1 \
+  TIMELINE_LIMIT_MONTHLY=0 \
+  TIMELINE_LIMIT_YEARLY=0
 
-cat > /etc/systemd/system/boot-fail-rollback.service <<ROLL
+cat > /etc/systemd/system/rollback.service <<ROLL
 [Unit]
+Description=Auto rollback on boot failure
 DefaultDependencies=no
-After=local-fs.target
-Before=multi-user.target
+Before=local-fs.target
+
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/boot-fail-rollback.sh
+ExecStart=/usr/bin/snapper -c root rollback
+
 [Install]
 WantedBy=multi-user.target
 ROLL
 
-cat > /etc/systemd/system/boot-success.service <<OK
-[Unit]
-After=multi-user.target
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/touch /run/boot-success
-[Install]
-WantedBy=multi-user.target
-OK
+systemctl enable rollback.service
 
-systemctl enable boot-fail-rollback boot-success
-
-### NETWORK
-systemctl enable NetworkManager
-
-### VIRTUAL NETWORK SUPPORT
-echo -e "bridge\nbr_netfilter\ntun\nveth" > /etc/modules-load.d/net.conf
-systemctl enable openvswitch-switch
-
-### TCPDUMP
+echo "==> Networking & kernel permissions"
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-forward.conf
 setcap cap_net_raw,cap_net_admin=eip /usr/bin/tcpdump
-
-### SWAPFILE (16GB)
-truncate -s 0 /swapfile
-chattr +C /swapfile
-dd if=/dev/zero of=/swapfile bs=1M count=16384
-chmod 600 /swapfile
-mkswap /swapfile
-echo "/swapfile none swap defaults 0 0" >> /etc/fstab
 
 EOF
 
-echo "======================================"
-echo " INSTALL COMPLETE"
-echo " User: tuhin"
-echo " Password: 1234"
-echo " Root login: DISABLED"
-echo " Silent Apple-style boot enabled"
-echo "======================================"
+umount -R /mnt
+swapoff -a
+
+echo "✅ INSTALL COMPLETE — REBOOT NOW"
