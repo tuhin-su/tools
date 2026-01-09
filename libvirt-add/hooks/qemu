@@ -1,0 +1,33 @@
+#!/bin/bash
+
+VM_NAME="$1"
+ACTION="$2"
+
+HOSTS_FILE="/etc/hosts"
+DOMAIN=".dev"
+
+# Only act on VM start
+if [[ "$ACTION" != "started" ]]; then
+    exit 0
+fi
+
+# Wait for DHCP
+sleep 3
+
+# Prefer qemu-guest-agent
+VM_IP=$(virsh domifaddr "$VM_NAME" --source agent 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d/ -f1)
+
+# Fallback
+if [[ -z "$VM_IP" ]]; then
+    VM_IP=$(virsh domifaddr "$VM_NAME" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d/ -f1)
+fi
+
+# Exit if no IP
+if [[ -z "$VM_IP" ]]; then
+    exit 0
+fi
+
+ENTRY="$VM_IP ${VM_NAME}${DOMAIN}"
+
+# Add once, never remove
+grep -q "${VM_NAME}${DOMAIN}" "$HOSTS_FILE" || echo "$ENTRY" >> "$HOSTS_FILE"
