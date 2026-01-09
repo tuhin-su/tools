@@ -1,0 +1,9 @@
+#!/bin/bash
+
+VM_NAME="$1"
+ACTION="$2"
+
+# Run worker in background (DO NOT WAIT)
+nohup /etc/libvirt/hooks/add-vm-host.sh "$VM_NAME" "$ACTION" >/dev/null 2>&1 &
+
+exit 0

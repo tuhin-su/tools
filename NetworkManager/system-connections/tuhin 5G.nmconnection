@@ -1,0 +1,18 @@
+[connection]
+id=tuhin 5G
+uuid=ef9bcc96-6784-4c01-9bd3-1b69923a2e24
+type=wifi
+interface-name=wlo1
+
+[wifi]
+mode=infrastructure
+ssid=tuhin 5G
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=default
+method=auto
+
+[proxy]
